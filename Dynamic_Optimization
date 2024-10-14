@@ -1,0 +1,81 @@
+import pandas as pd
+import numpy as np
+from docplex.mp.model import Model
+from google.colab import files
+
+uploaded = files.upload()
+parameters = pd.read_excel(list(uploaded.keys())[0], sheet_name='Parameters')
+
+setup_cost = parameters['Setup Cost'].tolist()
+production_cost = parameters['Production Cost'].tolist()
+inventory_cost = parameters['Holding Cost'].tolist()
+demand = parameters['Demand'].tolist()
+capacity = parameters['Production Capacity'].tolist()
+yield_value = parameters['Yield'].tolist()
+
+T = len(parameters)
+
+model = Model(name="Enhanced_Lot_Sizing")
+
+quantity = model.integer_var_list(T, name="quantity", lb=0)
+inventory = model.integer_var_list(T, name="inventory", lb=0)
+binary = model.binary_var_list(T, name="binary")
+
+objective = model.sum(
+    setup_cost[t] * binary[t] +
+    production_cost[t] * quantity[t] +
+    inventory_cost[t] * inventory[t]
+    for t in range(T)
+)
+
+model.minimize(objective)
+
+for t in range(T):
+    model.add_constraint(quantity[t] <= yield_value[t])
+    model.add_constraint(quantity[t] <= sum(demand))
+    model.add_constraint(quantity[t] <= capacity[t] * binary[t])
+    model.add_constraint(inventory[t] <= capacity[t] * binary[t])
+    if t > 0:
+        model.add_constraint(quantity[t] + inventory[t - 1] == demand[t] + inventory[t])
+
+solution = model.solve()
+
+if solution:
+    objective_value = model.objective_value
+    quantity_values = [solution.get_var_value(quantity[t]) for t in range(T)]
+    inventory_values = [solution.get_var_value(inventory[t]) for t in range(T)]
+    binary_values = [solution.get_var_value(binary[t]) for t in range(T)]
+
+    solution_data = {
+        'Objective Value': objective_value,
+        'Quantity': quantity_values,
+        'Inventory': inventory_values,
+        'Binary': binary_values
+    }
+
+    print("Solution:", solution_data)
+else:
+    print("No feasible solution found.")
+
+sensitivity_results = []
+
+for i in np.linspace(0.8, 1.2, 5):
+    model.set_objective(model.sum(
+        setup_cost[t] * binary[t] +
+        production_cost[t] * i * quantity[t] +
+        inventory_cost[t] * inventory[t]
+        for t in range(T)
+    ), sense="min")
+
+    solution = model.solve()
+    if solution:
+        sensitivity_results.append(solution.objective_value)
+
+import matplotlib.pyplot as plt
+
+plt.plot(np.linspace(0.8, 1.2, 5), sensitivity_results, marker='o')
+plt.xlabel('Scaling Factor')
+plt.ylabel('Objective Value')
+plt.title('Sensitivity Analysis')
+plt.grid(True)
+plt.show()
